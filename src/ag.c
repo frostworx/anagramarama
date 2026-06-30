@@ -83,6 +83,10 @@
 #include <gamerzilla.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #ifdef _MSC_VER
 #define snprintf _snprintf
 #endif
@@ -1409,13 +1413,16 @@ newGame(struct node** head, struct dlb_node* dlbHead,
 static Uint32
 TimerCallback(Uint32 interval, void *param)
 {
-    SDL_UserEvent evt;
-    evt.type = SDL_USEREVENT;
-    evt.code = 0;
-    evt.data1 = 0;
-    evt.data2 = 0;
-    SDL_PushEvent((SDL_Event *)&evt);
-    return 0;
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = SDL_USEREVENT;
+    event.user.code = 0;
+    event.user.data1 = NULL;
+    event.user.data2 = NULL;
+    
+    SDL_PushEvent(&event);
+    
+    return interval; 
 }
 
 /***********************************************************
@@ -1449,144 +1456,158 @@ inputs: head - first node in the answers list (in/out)
 
 outputs: n/a
 ***********************************************************/
+
+struct WebLoopContext {
+    struct node **head;
+    struct dlb_node *dlbHead;
+    SDL_Renderer *screen;
+    struct sprite **letters;
+    int timer_delay;
+    SDL_Rect dest;
+    SDL_TimerID timer;
+};
+
+static void gameLoopIteration(void *arg) {
+    struct WebLoopContext *ctx = (struct WebLoopContext *)arg;
+    SDL_Event event;
+    time_t timeNow;
+
+    if (quitGame) {
+#ifdef __EMSCRIPTEN__
+        emscripten_cancel_main_loop();
+        EM_ASM({
+            window.location.href = "https://github.com/frostworx/anagramarama";
+        });
+        free(ctx);
+        return;
+#endif
+    }
+
+    if (winGame) {
+        stopTheClock = 1;
+        solvePuzzle = 1;
+    }
+
+    if ((gameTime < AVAILABLE_TIME) && !stopTheClock) {
+        timeNow = time(0) - gameStart;
+        if (timeNow != gameTime){
+            gameTime = timeNow;
+            updateTime(ctx->screen);
+        }
+    } else {
+        if (!stopTheClock){
+            stopTheClock = 1;
+            solvePuzzle = 1;
+        }
+    }
+
+    if (solvePuzzle) {
+        solveIt(*(ctx->head));
+        clearWord(ctx->letters);
+        strcpy(shuffle, SPACE_FILLED_STRING);
+        strcpy(answer, rootWord);
+        gamePaused = 1;
+        if (!stopTheClock){
+            stopTheClock = 1;
+        }
+        solvePuzzle = 0;
+    }
+
+    if (updateAnswers){
+        clearWord(ctx->letters);
+        updateAnswers = 0;
+    }
+
+    if (startNewGame) {
+        if (!gotBigWord){
+            totalScore = 0;
+        }
+        newGame(ctx->head, ctx->dlbHead, ctx->screen, ctx->letters);
+        startNewGame = 0;
+    }
+
+    if (updateTheScore) {
+        updateScore(ctx->screen);
+        updateTheScore = 0;
+    }
+
+    if (shuffleRemaining) {
+        char shuffler[8];
+        strcpy(shuffler, shuffle);
+        shuffleAvailableLetters(shuffler, ctx->letters);
+        strcpy(shuffle, shuffler);
+        shuffleRemaining = 0;
+    }
+
+    if (clearGuess) {
+        if (clearWord(ctx->letters) > 0) {
+            if (audio_enabled)
+                Mix_PlayChannel(-1, getSound("clear"), 0);
+        }
+        clearGuess = 0;
+    }
+
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_USEREVENT) {
+            ctx->timer_delay = anySpritesMoving(ctx->letters) ? 10 : 100;
+        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+            SDLScale_MouseEvent(&event);
+            clickDetect(event.button.button, event.button.x,
+                        event.button.y, ctx->screen, *(ctx->head), ctx->letters);
+        } else if (event.type == SDL_KEYUP) {
+            handleKeyboardEvent(&event, *(ctx->head), ctx->letters);
+        } else if (event.type == SDL_QUIT) {
+            quitGame = 1;
+        } else if (event.type == SDL_WINDOWEVENT) {
+            if ((event.window.event == SDL_WINDOWEVENT_RESIZED) || (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+                double scalew = event.window.data1 / 800.0;
+                double scaleh = event.window.data2 / 600.0;
+                SDLScale_Set(scalew, scaleh);
+            }
+        }
+    }
+
+
+    moveSprites(&ctx->screen, ctx->letters, letterSpeed);
+
+    SDL_SetRenderDrawColor(ctx->screen, 0, 0, 0, 255);
+    SDL_RenderClear(ctx->screen);
+    SDLScale_RenderCopy(ctx->screen, backgroundTex, NULL, &ctx->dest);
+
+    displayAnswerBoxes(*(ctx->head), ctx->screen);
+    moveSprites(&ctx->screen, ctx->letters, letterSpeed);
+
+    SDL_RenderPresent(ctx->screen);
+}
+
 static void
 gameLoop(struct node **head, struct dlb_node *dlbHead, 
          SDL_Renderer *screen, struct sprite **letters)
 {
-    int done=0;
-    SDL_Event event;
-    time_t timeNow;
-    SDL_TimerID timer;
-    int timer_delay = 20;
-	SDL_Rect dest;
-	dest.x = 0;
-	dest.y = 0;
-	dest.w = 800;
-	dest.h = 600;
-    
-    timer = SDL_AddTimer(timer_delay, TimerCallback, NULL);
-	/* main game loop */
-	while (!done) {
-		SDL_SetRenderDrawColor(screen, 0, 0, 0, 255);
-		SDL_RenderClear(screen);
-		SDLScale_RenderCopy(screen, backgroundTex, NULL, &dest);
+    struct WebLoopContext *ctx = malloc(sizeof(struct WebLoopContext));
+    ctx->head = head;
+    ctx->dlbHead = dlbHead;
+    ctx->screen = screen;
+    ctx->letters = letters;
+    ctx->timer_delay = 20;
+    ctx->dest.x = 0;
+    ctx->dest.y = 0;
+    ctx->dest.w = 800;
+    ctx->dest.h = 600;
 
-		if (winGame) {
-			stopTheClock = 1;
-			solvePuzzle = 1;
-		}
+    ctx->timer = SDL_AddTimer(ctx->timer_delay, TimerCallback, NULL);
 
-		if ((gameTime < AVAILABLE_TIME) && !stopTheClock) {
-			timeNow = time(0) - gameStart;
-			if (timeNow != gameTime){
-				gameTime = timeNow;
-				updateTime(screen);
-			}
-		} else {
-			if (!stopTheClock){
-				stopTheClock = 1;
-				solvePuzzle = 1;
-			}
-		}
-
-		/* check messages */
-		if (solvePuzzle) {
-			/* walk the list, setting everything to found */
-			solveIt(*head);
-			clearWord(letters);
-			strcpy(shuffle, SPACE_FILLED_STRING);
-			strcpy(answer, rootWord);
-			/*displayLetters(screen);*/
-			gamePaused = 1;
-			if (!stopTheClock){
-				stopTheClock = 1;
-			}
-
-			solvePuzzle = 0;
-		}
-
-		if (updateAnswers){
-			/* move letters back down again */
-			clearWord(letters);
-			/* displayLetters(screen);*/
-
-			updateAnswers = 0;
-		}
-		displayAnswerBoxes(*head, screen);
-
-		if (startNewGame) {
-			/* move letters back down again */
-			if (!gotBigWord){
-				totalScore = 0;
-			}
-			newGame(head, dlbHead, screen, letters);
-
-			startNewGame = 0;
-		}
-
-		if (updateTheScore) {
-			updateScore(screen);
-			updateTheScore = 0;
-		}
-
-		if (shuffleRemaining) {
-			/* shuffle up the shuffle box */
-			char shuffler[8];
-			strcpy(shuffler, shuffle);
-			shuffleAvailableLetters(shuffler, letters);
-			strcpy(shuffle, shuffler);
-			shuffleRemaining = 0;
-		}
-
-		if (clearGuess) {
-			/* clear the guess; */
-			if (clearWord(letters) > 0) {
-				if (audio_enabled)
-					Mix_PlayChannel(-1, getSound("clear"),0);
-            }
-			clearGuess = 0;
-		}
-
-		if (quitGame) {
-			done = 1;
-		}
-
-//		SDL_RenderPresent(screen);
-		while (SDL_WaitEvent(&event)) {
-			if (event.type == SDL_USEREVENT) {
-                timer_delay = anySpritesMoving(letters) ? 10 : 100;
-				SDL_SetRenderDrawColor(screen, 0, 0, 0, 255);
-				SDL_RenderClear(screen);
-				SDLScale_RenderCopy(screen, backgroundTex, NULL, &dest);
-				displayAnswerBoxes(*head, screen);
-                moveSprites(&screen, letters, letterSpeed);
-                timer = SDL_AddTimer(timer_delay, TimerCallback, NULL);
-                break;
-            } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-				SDLScale_MouseEvent(&event);
-                clickDetect(event.button.button, event.button.x,
-                            event.button.y, screen, *head, letters);
-            } else if (event.type == SDL_KEYUP) {
-                handleKeyboardEvent(&event, *head, letters);
-            } else if (event.type == SDL_QUIT) {
-                done = 1;
-                break;
-			} else if (event.type == SDL_WINDOWEVENT) {
-				if ((event.window.event == SDL_WINDOWEVENT_RESIZED) || (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
-				{
-					double scalew = event.window.data1 / 800.0;
-					double scaleh = event.window.data2 / 600.0;
-					SDLScale_Set(scalew, scaleh);
-				}
-			}
-			SDL_SetRenderDrawColor(screen, 0, 0, 0, 255);
-			SDL_RenderClear(screen);
-			SDLScale_RenderCopy(screen, backgroundTex, NULL, &dest);
-			displayAnswerBoxes(*head, screen);
-            moveSprites(&screen, letters, letterSpeed);
-        }
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop_arg(gameLoopIteration, ctx, 0, 1);
+#else
+    while (!quitGame) {
+        gameLoopIteration(ctx);
+        SDL_Delay(16);
     }
+    free(ctx);
+#endif
 }
+
 
 static int
 is_valid_locale(const char *path)
