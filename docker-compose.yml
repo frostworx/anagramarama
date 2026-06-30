@@ -1,0 +1,12 @@
+services:
+  anagramarama:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anagramarama:latest
+    container_name: anagramarama
+    ports:
+      - "31416:80"
+    restart: unless-stopped
+    volumes:
+      - ./:/app/
