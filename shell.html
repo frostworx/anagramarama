@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
+    <title>Anagramarama</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: fixed;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Der Container zentriert das Spiel auf allen Bildschirmen */
+        div.emscripten_container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Kein aspect-ratio im CSS, um den SDL2-Blackscreen-Bug zu verhindern! */
+        canvas.emscripten {
+            border: none;
+            background-color: #000;
+            display: block;
+        }
+
+        /* Blendet die Emscripten-Deko aus */
+        textarea#output, div.emscripten_border, img#logo, div.spinner { 
+            display: none !important; 
+        }
+    </style>
+</head>
+<body>
+
+    <div class="emscripten_container">
+        <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+
+
+    <script type='text/javascript'>
+        var Module = {
+            preRun: [],
+            postRun: [function() {
+                // Aktiviert die Skalierung nach dem Laden
+                resizeGame();
+                // Reagiert auf Desktop-Resizes und das Drehen des Smartphones
+                window.addEventListener('resize', resizeGame);
+                window.addEventListener('orientationchange', resizeGame);
+            }],
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                return canvas;
+            })()
+        };
+
+        function resizeGame() {
+            var canvas = document.getElementById('canvas');
+            if (!canvas) return;
+
+            var windowWidth = window.innerWidth;
+            var windowHeight = window.innerHeight;
+            
+            // Berechne die optimalen Maße für das 4:3-Verhältnis
+            var targetWidth = windowWidth;
+            var targetHeight = windowWidth * (3 / 4);
+
+            // Falls das Spiel im aktuellen Modus (z.B. Querformat) zu hoch werden würde:
+            if (targetHeight > windowHeight) {
+                targetHeight = windowHeight;
+                targetWidth = windowHeight * (4 / 3);
+            }
+
+            // Setze die ermittelten Maße pixelgenau auf das Canvas
+            canvas.style.width = targetWidth + 'px';
+            canvas.style.height = targetHeight + 'px';
+            
+            // Ein kleiner Schubs für mobile Browser, um Layout-Verzögerungen beim Drehen abzufangen
+            window.scrollTo(0, 0);
+        }
+    </script>
+
+
+    {{{ SCRIPT }}}
+
+</body>
+</html>
